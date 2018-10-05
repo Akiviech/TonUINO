@@ -4,6 +4,16 @@ Die DIY Musikbox (nicht nur) für Kinder
 
 # Change Log
 
+## Christian Hermes Version 1.1 (05.10.2018)
+General:
+- Fixed some small bugs (I am using Eclipse IDE for programming, so I had to change some stuff).
+- Read and Write Card functions do not need parameters -> removed them.
+- Added Error output to serial console for DFPlayer.
+- Encapsulatet serial console output with DEBUG precompile switch.
+
+Feature:
+- Added INITIAL_VOLUME and MAX_VOLUME. Easier configuration per #define and maximum volume for Kids (DFMP3 modules 3W of power is a little bit too much).
+
 ## Version 2.0 (26.08.2018)
 
 - Lautstärke wird nun über einen langen Tastendruck geändert
