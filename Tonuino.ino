@@ -907,6 +907,9 @@ void modeHandler(uint8_t mode)
 
 		if (mode == EraseCard)
 		{
+			/* Set volume to standard level */
+			mp3.setVolume(INITIAL_VOLUME);
+
 			mp3.playMp3FolderTrack(800);
 			#if (DEBUG == 1)
 			Serial.println(F("Karte resetten..."));
