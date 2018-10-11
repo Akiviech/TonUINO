@@ -11,21 +11,40 @@
  ***************************************************************/
 #define DEBUG           1
 
+/*
+ * Pololu Power Switch
+ *
+ * Switch is used to switch off Arduino completely and provide
+ * a wakeup functionality via additional external switch
+ */
+#define POWER_SWITCH	0
+
 /****************************************************************
  * Global defines
  ***************************************************************/
-#define INITIAL_VOLUME  7
-#define MAX_VOLUME      15
+#define INITIAL_VOLUME  		7		/* Initial volume at Startup */
+#define MAX_VOLUME      		15		/* Maximum allowed volume */
 
-#define buttonPause     A0
-#define buttonUp        A1
-#define buttonDown      A2
-#define busyPin         4
+#define MAX_FOLDERS				99		/* Maximum folders on SD Card */
 
-#define LONG_PRESS      1000
+#define buttonPause     		A0
+#define buttonUp        		A1
+#define buttonDown      		A2
+#define busyPin         		4
 
-#define RST_PIN         9                 /* MFRC522 Reset Pin */
-#define SS_PIN          10                /* MFRC522 SS Pin */
+#if (POWER_SWITCH == 1)
+#define powerSwitchPin 			A7		/* TODO check */
+#endif
+
+#define LONG_PRESS      		1000
+
+#define RST_PIN         		9		/* MFRC522 Reset Pin */
+#define SS_PIN          		10		/* MFRC522 SS Pin */
+
+#if (POWER_SWITCH == 1)
+#define MAX_ON_TIME				(120 * 60)		/* maximun on time in seconds */
+#define ON_TIME_AFTER_HALT		(10 * 60)		/* time to power off after stopped or nothing happened */
+#endif
 
 /****************************************************************
  * Global variables
@@ -85,11 +104,36 @@ enum eModeHandling
 enum eStates
 {
 	Init = 1,
+	CardSetupFolderSelection,
+	CardSetupModeSelection,
+	CardSetupFileSelection,
 	Stop,
 	Play,
-	Pause
+	Pause,
+	ReadyForShutdown
 };
 
+enum eAdvertisements
+{
+	AdvNewTag = 300,
+	Adv310 =310,
+	AdvModeRandomEpisode = 311,
+	AdvModeAlbum = 312,
+	AdvModeParty = 313,
+	AdvModeSingleTrack = 314,
+	AdvModeAudioBook = 315,
+	AdvModeAdmin = 316,
+	AdvSelectFile = 320,
+	Adv330 = 330,
+	Adv331 = 331,
+	Adve332 = 332,
+	Adv400 = 400,
+	AdvError = 401,
+	AdvResetTag = 800,
+	AdvResetTagOk = 801,
+	AdvResetAborted = 802,
+	AdvResetOk = 999
+};
 
 /****************************************************************
  * Global structs
@@ -106,7 +150,6 @@ struct nfcTagObject
 /****************************************************************
  * Function Prototypes
  ***************************************************************/
-static void nextTrack(uint16_t track);
 bool isPlaying(void);
 
 int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
@@ -125,6 +168,10 @@ bool readCard(void);
 void writeCard(void);
 void setupCard(void);
 
+#if (POWER_SWITCH ==1)
+void InitPowerSwitch(void);
+void ProcessPowerSwitch(void);
+#endif
 
 /****************************************************************
  * MP3 notification class
@@ -179,8 +226,23 @@ class Mp3Notify
         Serial.println(track);
         #endif
         delay(100);
-        //modeHandler(PlayNextTrack);
-        nextTrack(track);
+        //nextTrack(track);
+        if ( (track == _lastTrackFinished)
+			 || (knownCard == false))
+		{
+			/*
+			 *  Letzter Track erreicht
+			 *
+			 *  Wenn eine neue Karte angelernt wird soll das Ende eines Tracks nicht verarbeitet werden
+			*/
+        	currentState = Stop;
+		}
+		else
+		{
+			modeHandler(PlayNextTrack);
+		}
+		/* aktuellen track zwischenspeichern */
+		_lastTrackFinished = track;
     }
     static void OnCardOnline(uint16_t code)
     {
@@ -203,31 +265,6 @@ class Mp3Notify
 };
 
 static DFMiniMp3<SoftwareSerial, Mp3Notify> mp3(mySoftwareSerial);
-
-/****************************************************************
- * nextTrack
- *
- * Play next track
- ***************************************************************/
-static void nextTrack(uint16_t track)
-{
-    if ( (track == _lastTrackFinished)
-          || (knownCard == false))
-    {
-      /*
-       *  Letzter Track erreicht
-       *
-       *  Wenn eine neue Karte angelernt wird soll das Ende eines Tracks nicht verarbeitet werden
-      */
-    	currentState = Init;
-    }
-    else
-    {
-    	modeHandler(PlayNextTrack);
-    }
-    /* aktuellen track zwischenspeichern */
-    _lastTrackFinished = track;
-}
 
 /****************************************************************
  * isPlaying
@@ -261,14 +298,23 @@ int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
 
         mp3.loop();
 
-        if (pauseButton.wasPressed())
-        {
-            if (returnValue != 0)
-            {
-                return returnValue;
-            }
-            delay(1000);
-        }
+        if (pauseButton.wasReleased())
+		{
+			if ((ignorePauseButton == false)
+					&& (returnValue != 0))
+			{
+				return returnValue;
+				delay(1000);
+			}
+			ignorePauseButton = false;
+		}
+		else if (pauseButton.pressedFor(LONG_PRESS)
+					&& ignorePauseButton == false)
+		{
+			/* play advertisement also in card configuration setup mode */
+			//TODO mark correct title first... modeHandler(PlayAdvertisement);
+			ignorePauseButton = true;
+		}
 
         if (upButton.pressedFor(LONG_PRESS))
         {
@@ -289,6 +335,8 @@ int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
                 else
                 {
                     mp3.playFolderTrack(previewFromFolder, returnValue);
+                    //temp for testing - play title number when changing title --> for single mode
+					modeHandler(PlayAdvertisement);
                 }
             }
             ignoreUpButton = true;
@@ -314,6 +362,8 @@ int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
                     else
                     {
                         mp3.playFolderTrack(previewFromFolder, returnValue);
+                        //temp for testing - play title number when changing title --> for single mode
+                        modeHandler(PlayAdvertisement);
                     }
                 }
             }
@@ -342,6 +392,8 @@ int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
                 else
                 {
                     mp3.playFolderTrack(previewFromFolder, returnValue);
+                    //temp for testing - play title number when changing title --> for single mode
+					modeHandler(PlayAdvertisement);
                 }
             }
             ignoreDownButton = true;
@@ -367,6 +419,8 @@ int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
                     else
                     {
                         mp3.playFolderTrack(previewFromFolder, returnValue);
+                        //temp for testing - play title number when changing title --> for single mode
+						modeHandler(PlayAdvertisement);
                     }
                 }
             }
@@ -391,29 +445,33 @@ void setupCard(void)
     #endif
 
     // Ordner abfragen
-    nfcTag.folder = voiceMenu(99, 300, 0, true);
+    currentState = CardSetupFolderSelection;
+    nfcTag.folder = voiceMenu(MAX_FOLDERS, AdvNewTag, 0, true);
 
     // Wiedergabemodus abfragen
-    nfcTag.mode = voiceMenu(6, 310, 310);
+    currentState = CardSetupModeSelection;
+    nfcTag.mode = voiceMenu(6, Adv310, Adv310);
 
     // Hörbuchmodus -> Fortschritt im EEPROM auf 1 setzen
-    EEPROM.write(nfcTag.folder,1);
+    currentState = CardSetupFileSelection;
+    EEPROM.update(nfcTag.folder,1);
 
     // Einzelmodus -> Datei abfragen
     if (nfcTag.mode == EinzelModus)
     {
-        nfcTag.special = voiceMenu(mp3.getFolderTrackCount(nfcTag.folder), 320, 0,
+        nfcTag.special = voiceMenu(mp3.getFolderTrackCount(nfcTag.folder), AdvSelectFile, 0,
                                  true, nfcTag.folder);
     }
 
     // Admin Funktionen
     if (nfcTag.mode == AdminModus)
     {
-        nfcTag.special = voiceMenu(3, 320, 320);
+        nfcTag.special = voiceMenu(3, AdvSelectFile, 320);
     }
 
     // Karte ist konfiguriert -> speichern
     writeCard();
+    currentState = Init;
 }
 
 /****************************************************************
@@ -528,7 +586,7 @@ void writeCard(void)
         Serial.print(F("PCD_Authenticate() failed: "));
         Serial.println(mfrc522.GetStatusCodeName(status));
         #endif
-        mp3.playMp3FolderTrack(401);
+        mp3.playMp3FolderTrack(AdvError);
         return;
     }
 
@@ -547,11 +605,11 @@ void writeCard(void)
         Serial.print(F("MIFARE_Write() failed: "));
         Serial.println(mfrc522.GetStatusCodeName(status));
         #endif
-        mp3.playMp3FolderTrack(401);
+        mp3.playMp3FolderTrack(AdvError);
     }
     else
     {
-        mp3.playMp3FolderTrack(400);
+        mp3.playMp3FolderTrack(Adv400);
     }
     Serial.println();
     delay(100);
@@ -620,8 +678,8 @@ void handleButtons(void)
 	{
 		if (!ignoreUpButton)
 		{
-			//modeHandler(PlayNextTrack);
-			nextTrack(random(65536));
+			modeHandler(PlayNextTrack);
+			//nextTrack(random(65536));
 		}
 		else
 		{
@@ -704,6 +762,8 @@ void modeHandler(uint8_t mode)
 				}
 				break;
 			case Albummodus:
+				currentState = Play;
+
 				if (mode == NewCardDetected)
 				{
 					#if (DEBUG == 1)
@@ -725,7 +785,8 @@ void modeHandler(uint8_t mode)
 					}
 					else
 					{
-						//      mp3.sleep();   // Je nach Modul kommt es nicht mehr zurÃ¼ck aus dem Sleep!
+						//mp3.sleep();   // Je nach Modul kommt es nicht mehr zurÃ¼ck aus dem Sleep!
+						currentState = Stop;
 					}
 				}
 				else if (mode == PlayPreviousTrack)
@@ -745,6 +806,8 @@ void modeHandler(uint8_t mode)
 				}
 				break;
 			case PartyModus:
+				currentState = Play;
+
 				if (mode == NewCardDetected)
 				{
 					#if (DEBUG == 1)
@@ -803,6 +866,8 @@ void modeHandler(uint8_t mode)
 				}
 				break;
 			case HoerbuchModusSave:
+				currentState = Play;
+
 				if (mode == NewCardDetected)
 				{
 					#if (DEBUG == 1)
@@ -824,13 +889,14 @@ void modeHandler(uint8_t mode)
 						#endif
 						mp3.playFolderTrack(nfcTag.folder, currentTrack);
 						// Fortschritt im EEPROM abspeichern
-						EEPROM.write(nfcTag.folder, currentTrack);
+						EEPROM.update(nfcTag.folder, currentTrack);
 					}
 					else
 					{
 						// mp3.sleep();  // Je nach Modul kommt es nicht mehr zurück aus dem Sleep!
 						// Fortschritt zurück setzen
-						EEPROM.write(nfcTag.folder, 1);
+						EEPROM.update(nfcTag.folder, 1);
+						currentState = Stop;
 					}
 				}
 				else if (mode == PlayPreviousTrack)
@@ -845,7 +911,7 @@ void modeHandler(uint8_t mode)
 					}
 					mp3.playFolderTrack(nfcTag.folder, currentTrack);
 					// Fortschritt im EEPROM abspeichern
-					EEPROM.write(nfcTag.folder, currentTrack);
+					EEPROM.update(nfcTag.folder, currentTrack);
 				}
 				else
 				{
@@ -902,7 +968,7 @@ void modeHandler(uint8_t mode)
 	}
 	else if (mode <= SetupCard)
 	{
-		knownCard = false;
+		//knownCard = false;
 		currentState = Init;
 
 		if (mode == EraseCard)
@@ -910,7 +976,7 @@ void modeHandler(uint8_t mode)
 			/* Set volume to standard level */
 			mp3.setVolume(INITIAL_VOLUME);
 
-			mp3.playMp3FolderTrack(800);
+			mp3.playMp3FolderTrack(AdvResetTag);
 			#if (DEBUG == 1)
 			Serial.println(F("Karte resetten..."));
 			#endif
@@ -924,7 +990,7 @@ void modeHandler(uint8_t mode)
 					#if (DEBUG == 1)
 					Serial.print(F("Abgebrochen!"));
 					#endif
-					mp3.playMp3FolderTrack(802);
+					mp3.playMp3FolderTrack(AdvResetAborted);
 					return;
 				}
 			}
@@ -949,6 +1015,11 @@ void modeHandler(uint8_t mode)
 	{
 
 	}
+
+	#if (DEBUG == 1)
+	Serial.print(F("Aktueller Status: "));
+	Serial.println(currentState);
+	#endif
 }
 
 
@@ -988,6 +1059,83 @@ void initCardReader(void)
     }
 }
 
+#if (POWER_SWITCH == 1)
+/****************************************************************
+ * InitPowerSwitch
+ *
+ * Initialize Power Switch functionality
+ ***************************************************************/
+void InitPowerSwitch(void)
+{
+	/* Initialize output for power off functionality */
+	pinMode(powerSwitchPin,OUTPUT);
+	digitalWrite(powerSwitchPin, false);
+}
+
+/****************************************************************
+ * InitPowerSwitch
+ *
+ * Process Power Switch functionality
+ ***************************************************************/
+void ProcessPowerSwitch(void)
+{
+	uint32_t currentTime;	/* current time in milliseconds */
+	static uint16_t lastTime = 0;	/* last time in seconds */
+	static uint16_t switchOffTimer = 0;	/* Switch Off timer in seconds */
+	bool switchOff = false;
+
+	currentTime = (uint32_t)(millis() / 1000);
+
+	if ((uint32_t)currentTime >= (uint32_t)(switchOffTimer))
+	{
+		/* increase switch off timer every second */
+		switchOffTimer++;
+		#if (DEBUG == 1)
+		if ((switchOffTimer % 30) == false)
+		{
+			Serial.print(F("Switch Off timer reached (seconds): "));
+			Serial.println(switchOffTimer);
+			Serial.print(F("Current Time: "));
+			Serial.println(currentTime);
+			Serial.print(F("Last Time (Pause/Stop): "));
+			Serial.println(lastTime);
+		}
+		#endif
+	}
+
+	switch(currentState)
+	{
+		case Play:
+			if (switchOffTimer >= MAX_ON_TIME)
+			{
+				switchOff = true;
+			}
+			lastTime = 0;
+			break;
+		case Pause:
+		case Stop:
+		default:
+			if (lastTime == 0)
+			{
+				lastTime = switchOffTimer;
+			}
+			if ((switchOffTimer - lastTime) >= ON_TIME_AFTER_HALT)
+			{
+				switchOff = true;
+			}
+			break;
+	}
+
+	if (switchOff == true)
+	{
+		#if (DEBUG == 1)
+		Serial.println(F("Switching off Tonuino now"));
+		#endif
+		digitalWrite(powerSwitchPin, true);
+	}
+}
+#endif
+
 /****************************************************************
  * Setup function
  *
@@ -1001,11 +1149,15 @@ void setup()
     /* Write some informations to console */
     Serial.println(F("TonUINO Version 2.0"));
     Serial.println(F("(c) Thorsten Voß"));
-    Serial.println(F("Modified by Christian Hermes v1.1"));
+    Serial.println(F("Modified by Christian Hermes v1.2"));
     #endif
 
     /* Initialize random seed */
     randomSeed(analogRead(A0));
+
+	#if (POWER_SWITCH == 1)
+    InitPowerSwitch();
+    #endif
 
     /* Initialize buttons */
     initButtons();
@@ -1029,7 +1181,7 @@ void setup()
         #endif
         for (uint16_t i = 0; i < (uint16_t)EEPROM.length(); i++)
         {
-            EEPROM.write(i, 0);
+            EEPROM.update(i, 0);
         }
     }
 
@@ -1053,6 +1205,11 @@ void loop()
 
         /* Process Button states */
         handleButtons();
+
+		#if (POWER_SWITCH == 1)
+        /* Process power switch */
+        ProcessPowerSwitch();
+		#endif
     }
 
     /* Check for new RFID Card */
@@ -1073,12 +1230,17 @@ void loop()
         }
         else
         {
-            // Neue Karte konfigurieren
-            modeHandler(EraseCard);
+        	/* Configure new card */
+            modeHandler(SetupCard);
         }
     }
     mfrc522.PICC_HaltA();
     mfrc522.PCD_StopCrypto1();
+
+	#if (POWER_SWITCH == 1)
+	/* Process power switch */
+	ProcessPowerSwitch();
+	#endif
 }
 
 
