@@ -3,6 +3,13 @@ Die DIY Musikbox (nicht nur) für Kinder
 
 
 # Change Log
+## Christian Hermes Version 1.2 (12.10.2018)
+General:
+- fixed some small bugs I introduced myself...
+
+Feature:
+- Volume up only in single steps possible. Volume Down also in bigger steps.
+- External power switch feature added. Can be used with "Pololu Pushbutton Power Switch" to switch off power after predefined maximum time or time after paused/stopped.
 
 ## Christian Hermes Version 1.1 (05.10.2018)
 General:
